@@ -1,0 +1,60 @@
+name: 'Colvin deploy NodeJs project'
+description: 'Deploy deploy NodeJs projects to Google Cloud'
+runs:
+  using: "composite"
+  steps:
+    - name: "Get kubernetes credentials"
+      run: gcloud container clusters get-credentials colvin --region $GCP_REGION
+      shell: bash
+
+    - name: "Terraform Init"
+      run: terraform init -backend-config="credentials=`echo $SA_GCP`" -backend-config="prefix=`echo $APP_NAME`" -input=false terraform/
+      shell: bash
+
+    - name: "Terraform Workspace"
+      run: terraform workspace select colvin terraform/ || terraform workspace new colvin terraform/
+      shell: bash
+
+    - name: "Terraform Plan"
+      run: terraform plan -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" terraform/
+      shell: bash
+
+    - name: "Terraform Apply"
+      run: terraform apply -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" -auto-approve terraform/
+      shell: bash
+
+    - name: "Get latest tag and auto increment version"
+      run: |
+        LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
+        REGEX="([0-9]+).([0-9]+)"
+        if [[ $LAST =~ $REGEX ]]; then MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; fi
+        if [ -z $MAJOR ]; then MAJOR="1"; MINOR="0"; fi
+        if [ $MAJOR_VERSION != $MAJOR ]; then MAJOR=$MAJOR_VERSION; MINOR="1"; else MINOR=$(echo $MINOR + 1 | bc); fi
+        echo "::set-env name=TAG_SERVER::$MAJOR.$MINOR"
+      shell: bash
+
+    - name: "Build docker images"
+      run: |
+        export SERVER_IMAGE="$IMG_SERVER:$TAG_SERVER"
+        docker-compose build --build-arg ENV_FILE_PATH=.env.production server
+      shell: bash
+
+    - name: "Configure docker-cli to push images in GCR"
+      run: gcloud auth configure-docker
+      shell: bash
+
+    - name: "Push docker images to GCR"
+      run: docker push $IMG_SERVER:$TAG_SERVER
+      shell: bash
+
+    - name: "Replace server version in helm values.yaml"
+      run: sed -i "s/TAG_SERVER/$TAG_SERVER/g" ./helm/values.yaml
+      shell: bash
+
+    - name: "Helm dependencies update"
+      run: helm dependency update ./helm/
+      shell: bash
+
+    - name: "Deploy Helm"
+      run: helm upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values-secrets.yaml --values=./helm/values-prod.yaml
+      shell: bash
