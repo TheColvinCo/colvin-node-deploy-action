@@ -1,32 +1,51 @@
-name: 'Colvin deploy NodeJs project'
-description: 'Deploy deploy NodeJs projects to Google Cloud'
+name: 'Colvin Deploy NodeJs Projects'
+description: 'Deploy Colvin NodeJs projects to Google Cloud'
 runs:
   using: "composite"
   steps:
+    - name: "Set branch ENV"
+      run: echo "::set-env name=BRANCH::$(echo ${GITHUB_REF##*/})"
+      shell: bash
+      
     - name: "Get kubernetes credentials"
-      run: gcloud container clusters get-credentials colvin --region $GCP_REGION
+      run: |
+        if [ $BRANCH == "master" ]; then
+            gcloud container clusters get-credentials colvin --region $GCP_REGION
+        else
+            gcloud container clusters get-credentials stage1 --zone $GCP_ZONE
+        fi
       shell: bash
 
     - name: "Terraform Init"
-      run: terraform init -backend-config="credentials=`echo $SA_GCP`" -backend-config="prefix=`echo $APP_NAME`" -input=false terraform/
+      run: if [ -d "./terraform" ]; then terraform init -backend-config="credentials=`echo $SA_GCP`" -backend-config="prefix=`echo $APP_NAME`" -input=false terraform/; fi
       shell: bash
 
     - name: "Terraform Workspace"
-      run: terraform workspace select colvin terraform/ || terraform workspace new colvin terraform/
+      run: |
+        if [ $BRANCH == "master" ]; then
+            if [ -d "./terraform" ]; then terraform workspace select colvin terraform/ || terraform workspace new colvin terraform/; fi
+        else
+            if [ -d "./terraform" ]; then terraform workspace select stage1 terraform/ || terraform workspace new stage1 terraform/; fi
+        fi
       shell: bash
 
     - name: "Terraform Plan"
-      run: terraform plan -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" terraform/
+      run: if [ -d "./terraform" ]; then terraform plan -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" terraform/; fi
       shell: bash
 
     - name: "Terraform Apply"
-      run: terraform apply -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" -auto-approve terraform/
+      run: if [ -d "./terraform" ]; then terraform apply -var="client_secret=`echo $SA_GCP`" -var="app_name=`echo $APP_NAME`" -auto-approve terraform/; fi
       shell: bash
 
     - name: "Get latest tag and auto increment version"
       run: |
-        LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
-        REGEX="([0-9]+).([0-9]+)"
+        if [ $BRANCH == "master" ]; then
+            LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
+            REGEX="([0-9]+).([0-9]+)"
+        else
+            LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^s[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
+            REGEX="(s[0-9]+).([0-9]+)"
+        fi
         if [[ $LAST =~ $REGEX ]]; then MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; fi
         if [ -z $MAJOR ]; then MAJOR="1"; MINOR="0"; fi
         if [ $MAJOR_VERSION != $MAJOR ]; then MAJOR=$MAJOR_VERSION; MINOR="1"; else MINOR=$(echo $MINOR + 1 | bc); fi
@@ -36,7 +55,11 @@ runs:
     - name: "Build docker images"
       run: |
         export SERVER_IMAGE="$IMG_SERVER:$TAG_SERVER"
-        docker-compose build --build-arg ENV_FILE_PATH=.env.production server
+        if [ $BRANCH == "master" ]; then
+            docker-compose build --build-arg ENV_FILE_PATH=.env.production server
+        else
+            docker-compose build --build-arg ENV_FILE_PATH=.env.stage1 server
+        fi
       shell: bash
 
     - name: "Configure docker-cli to push images in GCR"
@@ -48,13 +71,22 @@ runs:
       shell: bash
 
     - name: "Replace server version in helm values.yaml"
-      run: sed -i "s/TAG_SERVER/$TAG_SERVER/g" ./helm/values.yaml
+      run: sed -i "s/TAG_SERVER/$TAG_SERVER/g" ./helm/values.yaml ./helm/values.prod.yaml
       shell: bash
-
+      
+    - name: "Install Helm secrets plugin"
+      run: helm plugin install https://github.com/zendesk/helm-secrets
+      shell: bash
+      
     - name: "Helm dependencies update"
       run: helm dependency update ./helm/
       shell: bash
 
     - name: "Deploy Helm"
-      run: helm upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values-secrets.yaml --values=./helm/values-prod.yaml
+      run: |
+        if [ $BRANCH == "master" ]; then
+            helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values.prod.yaml --values=./helm/secrets.yaml --values=./helm/secrets.prod.yaml
+        else
+            helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/secrets.yaml
+        fi
       shell: bash
