@@ -43,6 +43,7 @@ runs:
             LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
             REGEX="([0-9]+).([0-9]+)"
         else
+            MAJOR_VERSION="s"$MAJOR_VERSION
             LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^s[0-9]" | grep -v TIMESTAMP | sort -rVk2 | head -n1 | awk '{print $2}'`
             REGEX="(s[0-9]+).([0-9]+)"
         fi
