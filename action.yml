@@ -3,8 +3,16 @@ description: 'Deploy Colvin NodeJs projects to Google Cloud'
 runs:
   using: "composite"
   steps:
-    - name: "Set branch ENV"
-      run: echo "BRANCH=${GITHUB_REF##*/}" >> $GITHUB_ENV
+    - name: "Set ENV variables"
+      run: |
+        echo "BRANCH=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        echo "STAGE=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: "Validating environments"
+      run: |
+        REGEX="^stage[1-$LIMIT_STG]{1}$"
+        if [[ ! $STAGE =~ $REGEX ]] && [ "$BRANCH" != "master" ]; then echo "ERROR: not allowed environment"; exit 1; fi
       shell: bash
       
     - name: "Get kubernetes credentials"
@@ -12,7 +20,7 @@ runs:
         if [ $BRANCH == "master" ]; then
             gcloud container clusters get-credentials colvin --region $GCP_REGION
         else
-            gcloud container clusters get-credentials stage1 --zone $GCP_ZONE
+            gcloud container clusters get-credentials stage --zone $GCP_ZONE
         fi
       shell: bash
 
@@ -25,7 +33,7 @@ runs:
         if [ $BRANCH == "master" ]; then
             if [ -d "./terraform" ]; then terraform workspace select colvin terraform/ || terraform workspace new colvin terraform/; fi
         else
-            if [ -d "./terraform" ]; then terraform workspace select stage1 terraform/ || terraform workspace new stage1 terraform/; fi
+            if [ -d "./terraform" ]; then terraform workspace select $STAGE terraform/ || terraform workspace new $STAGE terraform/; fi
         fi
       shell: bash
 
@@ -40,26 +48,26 @@ runs:
     - name: "Get latest tag and auto increment version"
       run: |
         if [ $BRANCH == "master" ]; then
-            LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^[0-9]" | sed '/TIMESTAMP/d' | sort -rVk2 | head -n1 | awk '{print $2}'`
+            LAST=`gcloud container images list-tags $REGISTRY --sort-by="TAGS" --filter="tags~^[0-9]" | sed '/TIMESTAMP/d' | sort -rVk2 | head -n1 | awk '{print $2}'`
             REGEX="([0-9]+).([0-9]+)"
         else
             MAJOR_VERSION="s"$MAJOR_VERSION
-            LAST=`gcloud container images list-tags $IMG_SERVER --sort-by="TAGS" --filter="tags~^s[0-9]" | sed '/TIMESTAMP/d' | sort -rVk2 | head -n1 | awk '{print $2}'`
+            LAST=`gcloud container images list-tags $REGISTRY --sort-by="TAGS" --filter="tags~^s[0-9]" | sed '/TIMESTAMP/d' | sort -rVk2 | head -n1 | awk '{print $2}'`
             REGEX="(s[0-9]+).([0-9]+)"
         fi
         if [[ $LAST =~ $REGEX ]]; then MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; fi
         if [ -z $MAJOR ]; then MAJOR="1"; MINOR="0"; fi
         if [ $MAJOR_VERSION != $MAJOR ]; then MAJOR=$MAJOR_VERSION; MINOR="1"; else MINOR=$(echo $MINOR + 1 | bc); fi
-        echo "TAG_SERVER=$MAJOR.$MINOR" >> $GITHUB_ENV
+        echo "TAG_IMG=$MAJOR.$MINOR" >> $GITHUB_ENV
       shell: bash
 
     - name: "Build docker images"
       run: |
-        export SERVER_IMAGE="$IMG_SERVER:$TAG_SERVER"
+        export CONTAINER_IMAGE="$REGISTRY:$TAG_IMG"
         if [ $BRANCH == "master" ]; then
-            docker-compose build --build-arg ENV_FILE_PATH=.env.production server
+            docker-compose build --build-arg ENV_FILE_PATH=.env.production $CONTAINER_NAME
         else
-            docker-compose build --build-arg ENV_FILE_PATH=.env.stage1 server
+            docker-compose build --build-arg ENV_FILE_PATH=.env.$STAGE $CONTAINER_NAME
         fi
       shell: bash
 
@@ -68,17 +76,17 @@ runs:
       shell: bash
 
     - name: "Push docker images to GCR"
-      run: docker push $IMG_SERVER:$TAG_SERVER
+      run: docker push $REGISTRY:$TAG_IMG
       shell: bash
 
     - name: "Replace server version in helm values.yaml"
-      run: sed -i "s/TAG_SERVER/$TAG_SERVER/g" ./helm/values.yaml ./helm/values.prod.yaml
+      run: sed -i "s/TAG_IMG/$TAG_IMG/g" ./helm/values.yaml
       shell: bash
-      
+
     - name: "Install Helm secrets plugin"
       run: helm plugin install https://github.com/zendesk/helm-secrets
       shell: bash
-      
+
     - name: "Helm dependencies update"
       run: helm dependency update ./helm/
       shell: bash
@@ -88,6 +96,7 @@ runs:
         if [ $BRANCH == "master" ]; then
             helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values.prod.yaml --values=./helm/secrets.yaml --values=./helm/secrets.prod.yaml
         else
-            helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/secrets.yaml
+            NUMSTG=`echo $STAGE | awk -F"stage" '{ print $2 }'`
+            helm secrets upgrade ${APP_NAME}${NUMSTG} ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values.$STAGE.yaml --values=./helm/secrets.yaml --values=./helm/secrets.$STAGE.yaml
         fi
       shell: bash
