@@ -8,13 +8,11 @@ runs:
         if [ ${GITHUB_REF##*/} == "master" ]; then
             if [ $DEPLOY_STAGE1 ]; then
                 echo "STAGE=stage1" >> $GITHUB_ENV
-                echo "master i stage"
+                echo "BRANCH=stage1" >> $GITHUB_ENV
             else
-                echo "master i no stage"
                 echo "BRANCH=${GITHUB_REF##*/}" >> $GITHUB_ENV
             fi
         else
-            echo "stage"
             echo "STAGE=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
         fi
       shell: bash
