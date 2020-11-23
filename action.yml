@@ -30,9 +30,14 @@ runs:
             gcloud container clusters get-credentials colvin --region $GCP_REGION
         else
             gcloud container clusters get-credentials stage --zone $GCP_ZONE
+            if [ `kubectl get nodes -o json | jq '.items | length'` -eq 0 ]; then echo "ERROR: stage is stopped. Remember to start it!"; exit 1; fi
         fi
       shell: bash
-
+      
+    - name: "Decrypt terraform encrypted values"
+      run: if [ -f "./terraform/variables-encrypted.tf.enc" ]; then sops -d terraform/variables-encrypted.tf.enc > terraform/variables-encrypted.tf; fi
+      shell: bash
+      
     - name: "Terraform Init"
       run: if [ -d "./terraform" ]; then terraform init -backend-config="credentials=`echo $SA_GCP`" -backend-config="prefix=`echo $APP_NAME`" -input=false terraform/; fi
       shell: bash
