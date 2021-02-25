@@ -98,7 +98,7 @@ runs:
       shell: bash
 
     - name: "Install Helm secrets plugin"
-      run: helm plugin install https://github.com/jkroepke/helm-secrets
+      run: helm plugin install https://github.com/jkroepke/helm-secrets --version v3.5.0
       shell: bash
 
     - name: "Helm dependencies update"
@@ -108,9 +108,9 @@ runs:
     - name: "Deploy Helm"
       run: |
         if [ $BRANCH == "master" ]; then
-            helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values.prod.yaml --values=./helm/secrets.yaml --values=./helm/secrets.prod.yaml
+            helm secrets upgrade $APP_NAME ./helm/ --install --wait --atomic -f ./helm/values.yaml -f ./helm/values.prod.yaml -f ./helm/secrets.yaml -f ./helm/secrets.prod.yaml
         else
             NUMSTG=`echo $STAGE | awk -F"stage" '{ print $2 }'`
-            helm secrets upgrade ${APP_NAME}${NUMSTG} ./helm/ --install --wait --atomic --values=./helm/values.yaml --values=./helm/values.$STAGE.yaml --values=./helm/secrets.yaml --values=./helm/secrets.$STAGE.yaml
+            helm secrets upgrade ${APP_NAME}${NUMSTG} ./helm/ --install --wait --atomic -f ./helm/values.yaml -f ./helm/values.$STAGE.yaml -f ./helm/secrets.yaml -f ./helm/secrets.$STAGE.yaml
         fi
       shell: bash
