@@ -79,9 +79,9 @@ runs:
       run: |
         export CONTAINER_IMAGE="$REGISTRY:$TAG_IMG"
         if [ $BRANCH == "master" ]; then
-            docker-compose build --build-arg ENV_FILE_PATH=.env.production $CONTAINER_NAME
+            docker-compose -f docker-compose.yml build --build-arg ENV_FILE_PATH=.env.production $CONTAINER_NAME
         else
-            docker-compose build --build-arg ENV_FILE_PATH=.env.$STAGE $CONTAINER_NAME
+            docker-compose -f docker-compose.yml build --build-arg ENV_FILE_PATH=.env.$STAGE $CONTAINER_NAME
         fi
       shell: bash
 
